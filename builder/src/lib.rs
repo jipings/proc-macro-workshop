@@ -61,6 +61,39 @@ fn generate_setter_funcs(fields: &StructFields) -> syn::Result<proc_macro2::Toke
     Ok(final_tokenstream)
 }
 
+fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ident) -> syn::Result<proc_macro2::TokenStream> {
+    let idents: Vec<_> = fields.iter().map(|f| {&f.ident}).collect();
+
+    let mut checker_code_pieces =Vec::new();
+    let mut fill_result_clauses = Vec::new();
+
+    for idx in 0..idents.len() {
+        let ident = idents[idx];
+        checker_code_pieces.push(quote! {
+            if self.#ident.is_none() {
+                let err = format!("{} field missing", stringify!(#ident));
+                return std::result::Result::Err(err.into())
+            }
+        });
+        fill_result_clauses.push(quote!{
+            #ident: self.#ident.clone().unwrap()
+        });
+    }
+
+    let token_stream = quote! {
+        pub fn build(&mut self) -> std::result::Result<#origin_struct_ident, std::boxed::Box<dyn std::error::Error>> {
+            #(#checker_code_pieces)* // 注意，由于我们要重复的是一组if判断代码块，它们之间不需要用逗号分隔，所以这里的重复模式是`*`，而不是之前重复结构体字段时用到的`,*`
+
+            let ret = #origin_struct_ident {
+                #(#fill_result_clauses),*
+            };
+            std::result::Result::Ok(ret)
+        }
+    };
+    
+    Ok(token_stream)
+}
+
 fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     // eprintln!("{:#?}", st.data);
     let struct_name = st.ident.to_string();
@@ -76,6 +109,8 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
     let builder_struct_funcs= generate_setter_funcs(fields)?;
 
+    let generated_builder_functions = generate_build_function(fields, struct_ident)?;
+
     let ret = quote! {
         pub struct #builder_name_ident {
             #builder_struct_fields_def
@@ -90,6 +125,7 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
         impl #builder_name_ident {
             #builder_struct_funcs
+            #generated_builder_functions
         }
 
 

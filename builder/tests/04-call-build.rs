@@ -21,6 +21,21 @@ pub struct Command {
     current_dir: String,
 }
 
+// impl CommandBuilder {
+//     pub fn build(&mut self) -> Result<Command, Box<dyn Error>> {
+//         if self.executable.is_none() {
+//             let err = format!("{} field is missing", "executable");
+//             return Err(err.into);
+//         }
+//         // ...
+
+//         Command {
+//             executable: self.executable.clone().unwrap(),
+//             //...
+//         };
+//     }
+// }
+
 fn main() {
     let mut builder = Command::builder();
     builder.executable("cargo".to_owned());
