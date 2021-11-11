@@ -7,7 +7,11 @@ extern crate proc_macro;
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input_derive = parse_macro_input!(input as syn::DeriveInput);
     // eprint!("INPUT: {:#?}", input_derive.ident);
-    proc_macro::TokenStream::from(do_expand(&input_derive).unwrap())
+    // proc_macro::TokenStream::from(.unwrap())
+    match do_expand(&input_derive) {
+        Ok(token_stream) => token_stream.into(),
+        Err(e) => e.to_compile_error().into(), 
+    }
 }
 
 type StructFields = syn::punctuated::Punctuated<syn::Field, syn::Token!(,)>;
@@ -44,22 +48,23 @@ fn get_generic_inner_type<'a>(ty: &'a syn::Type, outer_ident_name: &str) -> Opti
 
 fn generate_builder_struct_fields_def(fields: &StructFields) -> syn::Result<proc_macro2::TokenStream> {
     let idents: Vec<_> = fields.iter().map(|f| { &f.ident }).collect();
-    let types: Vec<_> = fields
+    let types: syn::Result<Vec<proc_macro2::TokenStream>> = fields
         .iter()
         .map(|f| {
             // 针对是否为 `Option` 类型字段，产生不同的结果
-            if let Some(inner_ty) = get_generic_inner_type(&f.ty, "Option") {
-                quote!(std::option::Option<#inner_ty>)
-            } else if get_user_specified_ident_for_vec(f).is_some() {
+            if let Some(inner_ty) = get_generic_inner_type(&f.ty,"Option") {
+                Ok(quote!(std::option::Option<#inner_ty>))
+            } else if get_user_specified_ident_for_vec(f)?.is_some() {
                 let origin_ty = &f.ty;
-                quote!(#origin_ty)
+                Ok(quote!(#origin_ty)) 
             } else {
                 let origin_ty = &f.ty;
-                quote!(std::option::Option<#origin_ty>)
+               Ok(quote!(std::option::Option<#origin_ty>))
             }
         })
         .collect();
 
+    let types = types?;
     let token_stream = quote! {
         #(#idents: #types),*
     };
@@ -67,21 +72,20 @@ fn generate_builder_struct_fields_def(fields: &StructFields) -> syn::Result<proc
 } 
 
 fn generate_builder_struct_factory_init_clauses(fields: &StructFields) -> syn::Result<Vec<proc_macro2::TokenStream>>{
-    let init_clauses: Vec<_> = fields.iter().map(|f| {
+    let init_clauses: syn::Result<Vec<proc_macro2::TokenStream>> = fields.iter().map(|f| {
         let ident = &f.ident;
-        if get_user_specified_ident_for_vec(f).is_some() {
-            quote! {
+        if get_user_specified_ident_for_vec(f)?.is_some() {
+            Ok(quote! {
                 #ident: std::vec::Vec::new()
-            }
+            })
         } else {
-            quote!{
+            Ok(quote!{
                 #ident: std::option::Option::None
-            }
+            })
         }
-        
     }).collect();
 
-    Ok(init_clauses)
+    Ok(init_clauses?)
 }
 
 fn generate_setter_funcs(fields: &StructFields) -> syn::Result<proc_macro2::TokenStream> {
@@ -99,7 +103,7 @@ fn generate_setter_funcs(fields: &StructFields) -> syn::Result<proc_macro2::Toke
                     self
                 }
             };
-        } else if let Some(ref user_specified_ident) = get_user_specified_ident_for_vec(&fields[idx]) {
+        } else if let Some(ref user_specified_ident) = get_user_specified_ident_for_vec(&fields[idx])? {
             let inner_ty = get_generic_inner_type(ty, "Vec")
                     .ok_or(syn::Error::new(fields[idx].span(),"each field must be specified with Vec field"))?;
             tokenstream_piece = quote! {
@@ -141,7 +145,7 @@ fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ide
     let mut fill_result_clauses = Vec::new();
 
     for (idx, (ident, ty)) in idents.iter().zip(types.iter()).enumerate() {
-        if get_generic_inner_type(ty, "Option").is_none() && get_user_specified_ident_for_vec(&fields[idx]).is_none() {
+        if get_generic_inner_type(ty, "Option").is_none() && get_user_specified_ident_for_vec(&fields[idx])?.is_none() {
             checker_code_pieces.push(quote! {
                 if self.#ident.is_none() {
                     let err = format!("{} field missing", stringify!(#ident));
@@ -150,7 +154,7 @@ fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ide
             });
         }
 
-        if get_user_specified_ident_for_vec(&fields[idx]).is_some() {
+        if get_user_specified_ident_for_vec(&fields[idx])?.is_some() {
             fill_result_clauses.push(quote! {
                 #ident: self.#ident.clone()
             });
@@ -180,7 +184,7 @@ fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ide
     Ok(token_stream)
 }
 
-fn get_user_specified_ident_for_vec(field: &syn::Field) -> Option<syn::Ident> {
+fn get_user_specified_ident_for_vec(field: &syn::Field) -> syn::Result<Option<syn::Ident>> {
     for attr in &field.attrs {
         if let Ok(syn::Meta::List(syn::MetaList {
             ref path,
@@ -193,10 +197,14 @@ fn get_user_specified_ident_for_vec(field: &syn::Field) -> Option<syn::Ident> {
                     if let Some(syn::NestedMeta::Meta(syn::Meta::NameValue(kv))) = nested.first() {
                         if kv.path.is_ident("each") {
                             if let syn::Lit::Str(ref ident_str) = kv.lit {
-                                return Some(syn::Ident::new(
+                                return Ok(Some(syn::Ident::new(
                                     ident_str.value().as_str(),
                                     attr.span(),
-                                ));
+                                )));
+                            }
+                        } else {
+                            if let Ok(syn::Meta::List(ref list)) = attr.parse_meta() {
+                                return Err(syn::Error::new_spanned(list, r#"expected `builder(each = "...")`"#))
                             }
                         }
                     }
@@ -205,7 +213,7 @@ fn get_user_specified_ident_for_vec(field: &syn::Field) -> Option<syn::Ident> {
         }
         
     }
-    None
+    Ok(None)
 }
 
 fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
