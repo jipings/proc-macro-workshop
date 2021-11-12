@@ -26,4 +26,5 @@ fn main() {
 
     let g = GeekKindergarten{blog:"foo".into(), ideawand:123, com:true};
     println!("{:?}", g);
+    println!("{:?}", format_args!("0b{:32b}", 123));
 }

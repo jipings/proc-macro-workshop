@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
-use syn::{self, spanned::Spanned};
-use quote::{ToTokens, quote};
+use syn::{self};
+use quote::{quote};
 
-#[proc_macro_derive(CustomDebug)]
+#[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input_derive = syn::parse_macro_input!(input as syn::DeriveInput);
     match do_expand(&input_derive) {
@@ -43,8 +43,13 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
         let field_name_ident = field.ident.as_ref().unwrap();
         let field_name_str = field_name_ident.to_string();
 
+        let mut format_str = "{:?}".to_string();
+        if let Some(format) = get_custom_format_of_field(field)? {
+            format_str = format;
+        }
+
         fmt_body_stream.extend(quote!(
-            .field(#field_name_str, &self.#field_name_ident) // 这行同样注意
+            .field(#field_name_str, &format_args!(#format_str, self.#field_name_ident)) // 这行同样注意
         ));
     }
 
@@ -59,4 +64,22 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
     };
 
     return Ok(ret_stream);
+}
+
+fn get_custom_format_of_field(field: &syn::Field) -> syn::Result<Option<String>> {
+    for attr in &field.attrs {
+        if let Ok(syn::Meta::NameValue(syn::MetaNameValue {
+            ref path,
+            ref lit,
+            ..
+        })) = attr.parse_meta()
+        {
+            if path.is_ident("debug") {
+                if let syn::Lit::Str(ref ident_str) = lit {
+                    return Ok(Some(ident_str.value()));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
