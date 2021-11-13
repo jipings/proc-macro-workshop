@@ -66,39 +66,50 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
     // 从输入的派生宏语法树节点获取被修饰的输入结构体的泛型信息
     let mut generics_param_to_modify = st.generics.clone();
 
-    let fields = get_fields_from_derive_input(st)?;
-    let mut field_type_names = Vec::new();
-    let mut phantomdata_type_param_names = Vec::new();
-    for field in fields {
-        if let Some(s) = get_field_type_name(field)? {
-            field_type_names.push(s);
-        }
-        if let Some(s) = get_phantomdata_generic_type_name(field)? {
-            phantomdata_type_param_names.push(s);
-        }
-    }
-
-    // 我们需要对每一个泛型参数都添加一个`Debug` Trait 限定
-    let associated_types_map = get_generic_associated_types(st);
-    for g in generics_param_to_modify.params.iter_mut() {
-        if let syn::GenericParam::Type(t) = g {
-            let type_param_name = t.ident.to_string();
-            if phantomdata_type_param_names.contains(&type_param_name) && !field_type_names.contains(&type_param_name) {
-                continue;
+    // 判定是否设置了限定条件干预，如果设定了，则不进行推断，直接使用用户给出的限定条件放到where子句中
+    if let Some(hatch) = get_struct_escape_hatch(st) {
+        generics_param_to_modify.make_where_clause();
+        generics_param_to_modify
+            .where_clause
+            .as_mut()
+            .unwrap()
+            .predicates
+            .push(syn::parse_str(hatch.as_str()).unwrap());
+    } else {
+        let fields = get_fields_from_derive_input(st)?;
+        let mut field_type_names = Vec::new();
+        let mut phantomdata_type_param_names = Vec::new();
+        for field in fields {
+            if let Some(s) = get_field_type_name(field)? {
+                field_type_names.push(s);
             }
-            // 如果是关联类型，就不要对泛型参数`T`本身再添加约束了,除非`T`本身也被直接使用了
-            if associated_types_map.contains_key(&type_param_name) && !field_type_names.contains(&type_param_name){
-                continue
+            if let Some(s) = get_phantomdata_generic_type_name(field)? {
+                phantomdata_type_param_names.push(s);
             }
-            t.bounds.push(parse_quote!(std::fmt::Debug));
         }
-    }
 
-    // 关联类型的约束要放到where子句里
-    generics_param_to_modify.make_where_clause();
-    for (_, associated_types) in associated_types_map {
-        for associated_type in associated_types {
-            generics_param_to_modify.where_clause.as_mut().unwrap().predicates.push(parse_quote!(#associated_type:std::fmt::Debug));
+        // 我们需要对每一个泛型参数都添加一个`Debug` Trait 限定
+        let associated_types_map = get_generic_associated_types(st);
+        for g in generics_param_to_modify.params.iter_mut() {
+            if let syn::GenericParam::Type(t) = g {
+                let type_param_name = t.ident.to_string();
+                if phantomdata_type_param_names.contains(&type_param_name) && !field_type_names.contains(&type_param_name) {
+                    continue;
+                }
+                // 如果是关联类型，就不要对泛型参数`T`本身再添加约束了,除非`T`本身也被直接使用了
+                if associated_types_map.contains_key(&type_param_name) && !field_type_names.contains(&type_param_name){
+                    continue
+                }
+                t.bounds.push(parse_quote!(std::fmt::Debug));
+            }
+        }
+
+        // 关联类型的约束要放到where子句里
+        generics_param_to_modify.make_where_clause();
+        for (_, associated_types) in associated_types_map {
+            for associated_type in associated_types {
+                generics_param_to_modify.where_clause.as_mut().unwrap().predicates.push(parse_quote!(#associated_type:std::fmt::Debug));
+            }
         }
     }
 
@@ -200,3 +211,19 @@ fn get_generic_associated_types(st: &syn::DeriveInput) -> HashMap<String, Vec<sy
     visitor.visit_derive_input(st);
     return visitor.associated_types;
 }
+
+fn get_struct_escape_hatch(st: &syn::DeriveInput) -> Option<String> {
+    if let Some(inner_attr) = st.attrs.last() {
+        if let Ok(syn::Meta::List(syn::MetaList {nested, ..})) = inner_attr.parse_meta(){
+            if let Some(syn::NestedMeta::Meta(syn::Meta::NameValue(path_value))) = nested.last() {
+                if path_value.path.is_ident("bound") {
+                    if let syn::Lit::Str(ref lit) = path_value.lit {
+                        return Some(lit.value());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
