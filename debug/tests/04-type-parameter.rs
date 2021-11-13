@@ -26,6 +26,10 @@ pub struct Field<T> {
     #[debug = "0b{:08b}"]
     bitmask: u8,
 }
+// 1. 从DeriveInput语法树节点获取泛型参数信息
+// 2. 为每一个泛型参数都添加一个Debug Trait限定
+// 3. 使用split_for_impl()工具函数切分出用于模板生成代码的三个片段
+// 4. 修改impl块的模板代码，使用上述三个片段，加入泛型参数信息
 
 fn main() {
     let f = Field {

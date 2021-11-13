@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, Debug};
 
 // Write code here.
 //
@@ -7,13 +7,15 @@ use std::fmt;
 //
 // To run the code:
 //     $ cargo run
-struct GeekKindergarten {
-    blog: String,
+struct GeekKindergarten<T> {
+    blog: T,
     ideawand: i32,
     com: bool,
 }
 
-impl fmt::Debug for GeekKindergarten {
+impl<T> fmt::Debug for GeekKindergarten<T> 
+where T: Debug
+{
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("GeekKindergarten")
         .field("blog", &self.blog)
@@ -24,7 +26,7 @@ impl fmt::Debug for GeekKindergarten {
 }
 fn main() {
 
-    let g = GeekKindergarten{blog:"foo".into(), ideawand:123, com:true};
+    let g: GeekKindergarten<&str> = GeekKindergarten{blog: "foo".into(), ideawand:123, com:true};
     println!("{:?}", g);
     println!("{:?}", format_args!("0b{:32b}", 123));
 }
