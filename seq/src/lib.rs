@@ -1,12 +1,17 @@
-use proc_macro::TokenStream;
+use proc_macro::{TokenStream};
 use proc_macro2;
 use syn;
 
 #[proc_macro]
 pub fn seq(input: TokenStream) -> TokenStream {
+    // eprintln!("{:#?}", input);
     let st = syn::parse_macro_input!(input as SeqParser);
 
-    return TokenStream::new();
+    let mut ret = proc_macro2::TokenStream::new();
+    for i in st.start..st.end {
+        ret.extend(st.expand(&st.body, i))
+    }
+    return ret.into();
 }
 
 struct SeqParser {
@@ -47,3 +52,40 @@ impl syn::parse::Parse for SeqParser {
     }
 }
 
+impl SeqParser {
+    fn expand(&self, ts: &proc_macro2::TokenStream, n: isize) -> proc_macro2::TokenStream {
+        let buf = ts.clone().into_iter().collect::<Vec<_>>();
+        let mut ret = proc_macro2::TokenStream::new();
+
+        // 为了简单实用了for循环
+        for idx in 0..buf.len() {
+            let tree_node = &buf[idx];
+            match tree_node {
+                proc_macro2::TokenTree::Group(g) => {
+                    // 如果是括号包含的内容，我们就递归处理内部的TokenStream
+                    let new_stream = self.expand(&g.stream(), n);
+                    // 这里需要注意，g.stream() 返回的是Group内部的TokenStream.
+                    let wrap_in_group = proc_macro2::Group::new(g.delimiter(), new_stream);
+                    ret.extend(quote::quote! {#wrap_in_group});
+                }
+                proc_macro2::TokenTree::Ident(i) => {
+                    // 如果是一个 Ident，那么看一下是否为要替换的变量标识符，如果是则替换，如果不是则透传
+                    if i == &self.variable_ident {
+                        let new_ident = proc_macro2::Literal::i64_unsuffixed(n as i64);
+                        ret.extend(quote::quote! {#new_ident});
+                    } else {
+                        ret.extend(quote::quote! {#tree_node});
+                    }
+                }
+                _ => {
+                    // 对于其他的元素（也就是Punct和Literal），原封不动传递
+                    ret.extend(quote::quote! {#tree_node});
+                }
+            }
+        }
+
+        ret
+    }
+
+    
+}
