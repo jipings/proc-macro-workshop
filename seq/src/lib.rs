@@ -57,8 +57,8 @@ impl SeqParser {
         let buf = ts.clone().into_iter().collect::<Vec<_>>();
         let mut ret = proc_macro2::TokenStream::new();
 
-        // 为了简单实用了for循环
-        for idx in 0..buf.len() {
+        let mut idx = 0;
+         while idx < buf.len() {
             let tree_node = &buf[idx];
             match tree_node {
                 proc_macro2::TokenTree::Group(g) => {
@@ -68,20 +68,45 @@ impl SeqParser {
                     let wrap_in_group = proc_macro2::Group::new(g.delimiter(), new_stream);
                     ret.extend(quote::quote! {#wrap_in_group});
                 }
-                proc_macro2::TokenTree::Ident(i) => {
+                proc_macro2::TokenTree::Ident(prefix) => {
+                    if idx + 2 < buf.len() { // 我们需要向后预读两个TokenTree元素
+                        if let proc_macro2::TokenTree::Punct(p) = &buf[idx+1] {
+                            if p.as_char() == '#' {
+                                if let proc_macro2::TokenTree::Ident(i) = &buf[idx+2] {
+                                    if i == &self.variable_ident // 校验是否连续，无空格
+                                    && prefix.span().end() == p.span().start()
+                                    && p.span().end() == i.span().start()
+                                    {
+                                        let new_ident_litral = format!("{}{}", prefix.to_string(), n);
+                                        let new_ident = proc_macro2::Ident::new(new_ident_litral.as_str(), prefix.span());
+                                        ret.extend(quote::quote!(#new_ident));
+                                        idx += 3;
+                                        continue;
+                                    }
+
+                                }
+                            }
+                        }
+
+                    }
+
+
                     // 如果是一个 Ident，那么看一下是否为要替换的变量标识符，如果是则替换，如果不是则透传
-                    if i == &self.variable_ident {
+                    if prefix == &self.variable_ident {
                         let new_ident = proc_macro2::Literal::i64_unsuffixed(n as i64);
                         ret.extend(quote::quote! {#new_ident});
-                    } else {
-                        ret.extend(quote::quote! {#tree_node});
-                    }
+                        idx += 1;
+                        continue;
+                    } 
+                    ret.extend(quote::quote! {#tree_node});
+                    
                 }
                 _ => {
                     // 对于其他的元素（也就是Punct和Literal），原封不动传递
                     ret.extend(quote::quote! {#tree_node});
                 }
             }
+            idx += 1;
         }
 
         ret
